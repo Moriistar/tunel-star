@@ -4,8 +4,9 @@
 # Project:      TUNEL-STAR (Ultimate Tunnel Manager)
 # Author:       Moriistar
 # GitHub:       https://github.com/Moriistar
-# Description:  Auto-install HAProxy, IPv6 & VXLAN Tunnels
+# Description:  Auto-install with IP Intelligence & Validation
 # Language:     English
+# Version:      3.5 (Smart IP Detection)
 # =========================================================
 
 # --- Colors ---
@@ -14,6 +15,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 # --- Root Check ---
@@ -33,14 +35,13 @@ show_header() {
     echo "/_/ /_/\__,_/_/ /_/\___/  /_/     /_____/\__/\__,_/_/            "
     echo -e "${NC}"
     echo -e "   ${YELLOW}PROJECT: TUNEL-STAR${NC} | ${GREEN}By MORIISTAR${NC}"
-    echo -e "   ${BLUE}v3.0 - Fully Automated / English Version${NC}"
+    echo -e "   ${BLUE}v3.5 - Smart IP Analyzer${NC}"
     echo "========================================================"
 }
 
 # --- Auto Install Dependencies ---
 install_deps() {
-    echo -e "${BLUE}[Wait] Checking and installing system dependencies...${NC}"
-    # Quiet update
+    echo -e "${BLUE}[Wait] Checking system dependencies...${NC}"
     apt-get update -qq > /dev/null 2>&1
     
     deps=("curl" "jq" "net-tools" "iproute2" "iptables" "nano" "haproxy")
@@ -52,21 +53,65 @@ install_deps() {
         fi
     done
     
-    # Netplan specific check
     if ! command -v netplan &> /dev/null; then
          apt-get install -y -qq netplan.io > /dev/null 2>&1
     fi
-    
-    echo -e "${GREEN}[OK] All dependencies are ready.${NC}"
     sleep 1
 }
 
-# --- Advisor (Smart Suggestion) ---
+# --- Smart IP Analysis Function ---
+analyze_ip() {
+    local ip=$1
+    local expected_loc=$2 # "IRAN" or "FOREIGN"
+
+    echo -e "${BLUE} > Analyzing IP: $ip ...${NC}"
+    
+    # Fetch data from API
+    local api_data=$(curl -s --max-time 5 "http://ip-api.com/json/$ip")
+    
+    if [[ -z "$api_data" ]] || [[ "$api_data" == *"fail"* ]]; then
+        echo -e "${RED}[!] Could not verify IP info (API Offline). Proceeding with caution.${NC}"
+        return
+    fi
+
+    local country=$(echo "$api_data" | jq -r '.country')
+    local isp=$(echo "$api_data" | jq -r '.isp')
+    local org=$(echo "$api_data" | jq -r '.org')
+    local city=$(echo "$api_data" | jq -r '.city')
+
+    echo -e " ----------------------------------------------"
+    echo -e "  ${YELLOW}IP Address:${NC}  $ip"
+    echo -e "  ${YELLOW}Location:${NC}    $country ($city)"
+    echo -e "  ${YELLOW}Datacenter:${NC}  $isp / $org"
+    echo -e " ----------------------------------------------"
+
+    # Logic Check
+    if [[ "$expected_loc" == "IRAN" ]]; then
+        if [[ "$country" != "Iran" ]]; then
+            echo -e "${RED}[WARNING] You said this is IRAN, but it is located in $country!${NC}"
+            read -p "Are you sure you want to continue? (y/n): " confirm
+            if [[ "$confirm" != "y" ]]; then exit 1; fi
+        else
+            echo -e "${GREEN}[OK] Confirmed: This is an Iranian IP.${NC}"
+        fi
+    elif [[ "$expected_loc" == "FOREIGN" ]]; then
+        if [[ "$country" == "Iran" ]]; then
+            echo -e "${RED}[WARNING] You said this is FOREIGN, but it is located in Iran!${NC}"
+            read -p "Are you sure you want to continue? (y/n): " confirm
+            if [[ "$confirm" != "y" ]]; then exit 1; fi
+        else
+            echo -e "${GREEN}[OK] Confirmed: This is a Foreign IP ($country).${NC}"
+        fi
+    fi
+    echo ""
+}
+
+# --- Advisor ---
 show_advice() {
     echo -e "\n${MAGENTA}--- Tunnel Advisor ---${NC}"
-    echo -e "${GREEN}1. HAProxy (Recommended):${NC} Best for standard Web/V2Ray (TCP) relay. Low CPU usage, very stable."
-    echo -e "${GREEN}2. IPv6 Tunnel (6to4):${NC} Best for bypassing IP filtering. Creates a tunnel inside IPv4."
-    echo -e "${GREEN}3. VXLAN (Layer 2):${NC} Best if you need to connect two servers as if they are on the same LAN."
+    echo -e "${GREEN}1. HAProxy:${NC} Best for Web/V2Ray (TCP). Low CPU, High Speed."
+    echo -e "${GREEN}2. IPv6 Tunnel:${NC} Best for IP filtering bypass (6to4)."
+    echo -e "${GREEN}3. VXLAN:${NC} Layer 2 connection. Good for gaming/VOIP."
     echo -e "--------------------------------------------------------"
 }
 
@@ -74,15 +119,16 @@ show_advice() {
 #                 MODULE 1: HAProxy
 # =========================================================
 install_haproxy() {
-    echo -e "${BLUE}[Wait] Configuring HAProxy...${NC}"
-    
     echo -e "${YELLOW}>> HAProxy Setup <<${NC}"
-    read -p "Remote Server IP (Destination): " REMOTE_IP
-    read -p "Local Ports to Forward (e.g., 443,80,2082 - separate with comma): " PORTS_STR
     
+    read -p "Enter REMOTE Server IP (Kharej): " REMOTE_IP
+    analyze_ip "$REMOTE_IP" "FOREIGN"
+    
+    read -p "Enter Local Ports to Forward (e.g., 443,80,2082 - separate with comma): " PORTS_STR
+    
+    echo -e "${BLUE}[Wait] Configuring HAProxy...${NC}"
     CFG="/etc/haproxy/haproxy.cfg"
     
-    # Base Config
     cat <<EOL > $CFG
 global
     log /dev/log local0
@@ -104,7 +150,6 @@ defaults
 
 EOL
 
-    # Loop through ports
     IFS=',' read -ra PORT_LIST <<< "$PORTS_STR"
     for port in "${PORT_LIST[@]}"; do
         cat <<EOL >> $CFG
@@ -118,7 +163,7 @@ EOL
     done
 
     systemctl restart haproxy
-    echo -e "${GREEN}[Success] HAProxy Tunnel is active!${NC}"
+    echo -e "${GREEN}[Success] HAProxy Tunnel is active pointing to $REMOTE_IP!${NC}"
 }
 
 # =========================================================
@@ -126,12 +171,15 @@ EOL
 # =========================================================
 install_ipv6() {
     echo -e "${YELLOW}>> IPv6 6to4 Tunnel Setup <<${NC}"
-    echo "1) I am the IRAN Server (Local)"
-    echo "2) I am the KHAREJ Server (Remote)"
+    echo "1) I am the IRAN Server"
+    echo "2) I am the FOREIGN Server (Kharej)"
     read -p "Select your role (1 or 2): " SIDE
 
-    read -p "IRAN Server IPv4: " IRAN_IP
-    read -p "KHAREJ Server IPv4: " KHAREJ_IP
+    read -p "Enter IRAN Server IP: " IRAN_IP
+    analyze_ip "$IRAN_IP" "IRAN"
+
+    read -p "Enter FOREIGN Server IP: " KHAREJ_IP
+    analyze_ip "$KHAREJ_IP" "FOREIGN"
     
     # Generate random ULA prefix
     PREFIX="fd$(printf '%x' $((RANDOM%256))):$(printf '%x' $((RANDOM%65536)))"
@@ -166,7 +214,7 @@ EOF
 
     netplan apply
     
-    # Create Keepalive Service
+    # Keepalive Service
     CONNECTOR="/root/tunel-star-keepalive.sh"
     cat > "$CONNECTOR" <<EOL
 #!/bin/bash
@@ -198,8 +246,7 @@ EOF
 
     echo -e "${GREEN}[Success] IPv6 Tunnel Established.${NC}"
     echo -e "Your IPv6: ${CYAN}$MY_IPV6${NC}"
-    echo -e "${RED}IMPORTANT:${NC} You must run this script on the OTHER server with the opposite role."
-    echo -e "Keep the generated prefix if needed manually: $PREFIX"
+    echo -e "Use the generated prefix on the other server if doing manual setup."
 }
 
 # =========================================================
@@ -207,10 +254,13 @@ EOF
 # =========================================================
 install_vxlan() {
     echo -e "${YELLOW}>> VXLAN Layer 2 Setup <<${NC}"
-    read -p "Remote Server IP (The other side): " REMOTE_IP
+    
+    read -p "Enter REMOTE Server IP: " REMOTE_IP
+    # Cannot strictly guess role here, so we just show info
+    analyze_ip "$REMOTE_IP" "UNKNOWN"
+    
     read -p "Tunnel Internal IP (e.g., 192.168.100.1): " VXLAN_IP
     
-    # Auto-detect interface
     INTERFACE=$(ip route get 1.1.1.1 | awk '{print $5}' | head -n1)
     
     echo -e "${BLUE}[Wait] Creating Persistent Service...${NC}"
@@ -237,10 +287,9 @@ EOF
     systemctl enable tunel-star-vxlan
     systemctl restart tunel-star-vxlan
     
-    # Add Firewall Rules
     iptables -I INPUT -p udp --dport 4789 -j ACCEPT
     
-    echo -e "${GREEN}[Success] VXLAN Service Installed & Started.${NC}"
+    echo -e "${GREEN}[Success] VXLAN Service Installed.${NC}"
 }
 
 # =========================================================
@@ -257,17 +306,14 @@ install_bbr() {
 uninstall_all() {
     echo -e "${RED}[!] Removing all Tunel-Star configurations...${NC}"
     
-    # HAProxy
     apt-get purge -y haproxy > /dev/null 2>&1
     rm -f /etc/haproxy/haproxy.cfg
     
-    # IPv6
     rm -f /etc/netplan/tunel-star-6to4.yaml
     systemctl stop tunel-star-ipv6 > /dev/null 2>&1
     systemctl disable tunel-star-ipv6 > /dev/null 2>&1
     rm -f /etc/systemd/system/tunel-star-ipv6.service
     
-    # VXLAN
     systemctl stop tunel-star-vxlan > /dev/null 2>&1
     systemctl disable tunel-star-vxlan > /dev/null 2>&1
     rm -f /etc/systemd/system/tunel-star-vxlan.service
@@ -286,7 +332,7 @@ install_deps
 show_header
 
 echo -e "Hello! I am the ${YELLOW}Tunel-Star${NC} installer bot."
-echo -e "I have installed all necessary dependencies for you.\n"
+echo -e "I will analyze IPs to ensure correct configuration.\n"
 
 echo "What would you like to do?"
 echo "1) Install HAProxy (TCP Tunnel)"
