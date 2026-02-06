@@ -17,5 +17,4 @@
 در **سرور ایران** خود، دستور زیر را کپی و اجرا کنید. (نیاز به نصب هیچ چیزی نیست، خود اسکریپت همه کارها را انجام می‌دهد):
 
 ```bash
-bash <(curl -Ls [https://raw.githubusercontent.com/Moriistar/tunel-star/main/install.sh](https://raw.githubusercontent.com/Moriistar/tunel-star/main/install.sh))
-
+bash <(curl -Ls https://raw.githubusercontent.com/Moriistar/tunel-star/main/install.sh)
